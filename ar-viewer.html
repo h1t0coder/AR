@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AR Viewer</title>
+
+  <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      font-family: 'Helvetica Neue', sans-serif;
+      overflow: hidden;
+      height: 100dvh;
+    }
+
+    #ar-scene {
+      width: 100%;
+      height: 100%;
+      position: fixed;
+      top: 0; left: 0;
+    }
+
+    /* ── UI overlay ── */
+    #ui {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      padding: 0 24px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    .btn {
+      pointer-events: all;
+      border: none;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 0.1s, opacity 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn:active { transform: scale(0.92); opacity: 0.7; }
+
+    /* 矢印ボタン */
+    .arrow-btn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1.5px solid rgba(255,255,255,0.35);
+    }
+    .arrow-btn svg {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: #fff;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* 撮影ボタン */
+    #shutter-btn {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 0 0 4px rgba(255,255,255,0.3), 0 4px 20px rgba(0,0,0,0.4);
+      position: relative;
+      flex-shrink: 0;
+    }
+    #shutter-btn::after {
+      content: '';
+      position: absolute;
+      inset: 6px;
+      border-radius: 50%;
+      border: 2px solid rgba(0,0,0,0.12);
+    }
+    #shutter-btn.flash {
+      animation: flash-anim 0.25s ease-out;
+    }
+    @keyframes flash-anim {
+      0%   { background: #fff; box-shadow: 0 0 0 4px rgba(255,255,255,0.3), 0 0 60px 20px rgba(255,255,255,0.8); }
+      100% { background: #fff; box-shadow: 0 0 0 4px rgba(255,255,255,0.3), 0 4px 20px rgba(0,0,0,0.4); }
+    }
+
+    /* モデル番号インジケーター */
+    #model-indicator {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+      display: flex;
+      gap: 7px;
+      pointer-events: none;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.35);
+      transition: background 0.2s, transform 0.2s;
+    }
+    .dot.active {
+      background: #fff;
+      transform: scale(1.3);
+    }
+
+    /* フラッシュオーバーレイ */
+    #flash-overlay {
+      position: fixed;
+      inset: 0;
+      background: #fff;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 200;
+      transition: opacity 0.05s;
+    }
+    #flash-overlay.on { opacity: 1; }
+
+    /* 保存完了トースト */
+    #toast {
+      position: fixed;
+      bottom: 130px;
+      left: 50%;
+      transform: translateX(-50%) translateY(10px);
+      background: rgba(0,0,0,0.72);
+      color: #fff;
+      font-size: 13px;
+      padding: 8px 18px;
+      border-radius: 20px;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 300;
+      transition: opacity 0.2s, transform 0.2s;
+      white-space: nowrap;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<!-- ────────────────────────────────────────────
+  📌 セットアップ手順:
+  1. marker.mind を同じフォルダに置く
+     → MindAR の Image Target Compiler で生成:
+        https://hiukim.github.io/mind-ar-js-doc/tools/compiler
+  2. 1.glb / 2.glb / 3.glb を同じフォルダに置く
+  3. モデルを増やすときは下の MODELS 配列に追加するだけ
+──────────────────────────────────────────── -->
+
+<div id="flash-overlay"></div>
+<div id="toast">画像を保存しました</div>
+
+<!-- モデルインジケーター（ドット） -->
+<div id="model-indicator"></div>
+
+<!-- A-Frame シーン -->
+<a-scene
+  id="ar-scene"
+  mindar-image="imageTargetSrc: ./marker.mind; autoStart: true; uiLoading: yes; uiScanning: yes; uiError: yes;"
+  color-space="sRGB"
+  renderer="colorManagement: true; physicallyCorrectLights: true;"
+  vr-mode-ui="enabled: false"
+  device-orientation-permission-ui="enabled: false"
+>
+  <a-assets>
+    <!-- モデルを増やすときはここに <a-asset-item> を追加 -->
+    <a-asset-item id="m1" src="./1.glb"></a-asset-item>
+    <a-asset-item id="m2" src="./2.glb"></a-asset-item>
+    <a-asset-item id="m3" src="./3.glb"></a-asset-item>
+  </a-assets>
+
+  <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+  <a-entity mindar-image-target="targetIndex: 0">
+    <a-gltf-model id="model-display"
+      src="#m1"
+      position="0 0 0"
+      scale="0.2 0.2 0.2"
+      rotation="0 0 0"
+    ></a-gltf-model>
+  </a-entity>
+</a-scene>
+
+<!-- UI -->
+<div id="ui">
+  <button class="btn arrow-btn" id="prev-btn" aria-label="前のモデル">
+    <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+  </button>
+
+  <button class="btn" id="shutter-btn" aria-label="撮影"></button>
+
+  <button class="btn arrow-btn" id="next-btn" aria-label="次のモデル">
+    <svg viewBox="0 0 24 24"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+</div>
+
+<script>
+// ════════════════════════════════════════
+// ⚙️  モデル設定 — ここを編集するだけ
+// ════════════════════════════════════════
+const MODELS = [
+  { id: '#m1', scale: '0.2 0.2 0.2', position: '0 0 0', rotation: '0 0 0' },
+  { id: '#m2', scale: '0.2 0.2 0.2', position: '0 0 0', rotation: '0 0 0' },
+  { id: '#m3', scale: '0.2 0.2 0.2', position: '0 0 0', rotation: '0 0 0' },
+  // { id: '#m4', scale: '0.2 0.2 0.2', position: '0 0 0', rotation: '0 0 0' },
+];
+// ════════════════════════════════════════
+
+let current = 0;
+
+const modelEl   = document.getElementById('model-display');
+const prevBtn   = document.getElementById('prev-btn');
+const nextBtn   = document.getElementById('next-btn');
+const shutterBtn= document.getElementById('shutter-btn');
+const indicator = document.getElementById('model-indicator');
+const flash     = document.getElementById('flash-overlay');
+const toast     = document.getElementById('toast');
+
+// ── ドット生成 ──
+function buildDots() {
+  indicator.innerHTML = '';
+  MODELS.forEach((_, i) => {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === current ? ' active' : '');
+    indicator.appendChild(d);
+  });
+}
+
+// ── モデル切り替え ──
+function switchModel(index) {
+  current = (index + MODELS.length) % MODELS.length;
+  const m = MODELS[current];
+  modelEl.setAttribute('src', m.id);
+  modelEl.setAttribute('scale', m.scale);
+  modelEl.setAttribute('position', m.position);
+  modelEl.setAttribute('rotation', m.rotation);
+
+  // ドット更新
+  [...indicator.children].forEach((d, i) =>
+    d.classList.toggle('active', i === current)
+  );
+}
+
+prevBtn.addEventListener('click', () => switchModel(current - 1));
+nextBtn.addEventListener('click', () => switchModel(current + 1));
+
+// ── 撮影ボタン ──
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+shutterBtn.addEventListener('click', () => {
+  // 画面フラッシュ
+  flash.classList.add('on');
+  setTimeout(() => flash.classList.remove('on'), 120);
+
+  // Three.js renderer から canvas を取得して保存
+  const scene = document.getElementById('ar-scene');
+  const renderer = scene.renderer;
+
+  if (!renderer) {
+    showToast('カメラ準備中…');
+    return;
+  }
+
+  // preserveDrawingBuffer が必要なため次フレームでキャプチャ
+  renderer.preserveDrawingBuffer = true;
+  requestAnimationFrame(() => {
+    const canvas = renderer.domElement;
+    try {
+      const dataURL = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataURL;
+      a.download = `ar-capture-${Date.now()}.png`;
+      a.click();
+      showToast('画像を保存しました');
+    } catch(e) {
+      showToast('保存に失敗しました');
+      console.error(e);
+    }
+    renderer.preserveDrawingBuffer = false;
+  });
+});
+
+// ── 初期化 ──
+buildDots();
+</script>
+</body>
+</html>
